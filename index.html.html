@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>点亮足迹 - 全球与中国</title>
+    <!-- 引入 Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; overflow: hidden; background: #222; }
+        #map { width: 100vw; height: 100vh; background: #1a1a1a; }
+        
+        /* 左上角控制面板 */
+        .ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            min-width: 250px;
+        }
+        .ui-panel h2 { margin: 0 0 10px 0; font-size: 18px; color: #333; }
+        .stat-row { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 14px; color: #666; }
+        .highlight-num { color: #ff9a00; font-weight: bold; }
+        
+        .btn {
+            background: #ff9a00;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+            width: 100%;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        .btn:hover { background: #e68a00; }
+        .btn.reset { background: #999; margin-top: 5px; }
+        .btn.back { display: none; background: #333; } /* 返回按钮默认隐藏 */
+
+        /* 地图交互样式 */
+        .leaflet-container { background: #1a1a1a; }
+        .leaflet-interactive { stroke: #ffffff; stroke-width: 0.8px; transition: fill 0.3s; }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div class="ui-panel">
+    <h2>🌍 我的足迹</h2>
+    <div class="stat-row">
+        <span>已点亮地区:</span>
+        <span id="count" class="highlight-num">0</span>
+    </div>
+    <!-- 返回按钮：仅在查看中国地图时显示 -->
+    <button class="btn back" id="backBtn" onclick="goBackToWorld()">← 返回世界视图</button>
+    <button class="btn" onclick="resetData()">重置所有数据</button>
+</div>
+
+<!-- 引入 Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    // --- 1. 初始化地图 ---
+    const map = L.map('map', {
+        center: [35, 105], // 初始中心点：中国
+        zoom: 3,           // 初始缩放级别
+        zoomControl: false, // 隐藏默认的缩放按钮
+        minZoom: 2
+    });
+
+    // 添加深色底图 (CartoDB DarkMatter)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap &copy; CARTO',
+        subdomains: 'abcd',
+        maxZoom: 19
+    }).addTo(map);
+
+    // --- 2. 全局变量 ---
+    let visitedPlaces = JSON.parse(localStorage.getItem('myVisitedPlaces')) || {};
+    let currentGeoJsonLayer = null; // 当前地图图层
+    let currentLevel = 'world';     // 当前层级：'world' 或 'china'
+
+    // --- 3. 核心样式函数 ---
+    function getStyle(feature) {
+        // 获取唯一标识符：优先使用 name，其次 id
+        // 注意：不同数据源的属性名可能不同，这里做兼容处理
+        const id = feature.properties.name || feature.id || feature.properties.adcode;
+        const isVisited = visitedPlaces[id];
+
+        return {
+            fillColor: isVisited ? '#ff9a00' : '#334455', // 点亮：橙色，未点亮：深蓝灰
+            fillOpacity: isVisited ? 0.9 : 0.4,
+            color: '#ffffff', // 边界颜色
+            weight: 1
+        };
+    }
+
+    // --- 4. 点击事件处理 ---
+    function onFeatureClick(e, feature) {
+        const name = feature.properties.name;
+        const id = feature.properties.name || feature.id || feature.properties.adcode;
+
+        // === 逻辑判断：下钻 ===
+        // 如果当前在世界地图，且点击的是中国
+        if (currentLevel === 'world' && name === 'China') {
+            enterChinaView();
+            return; // 结束点击，不执行点亮逻辑（或者你可以选择同时点亮中国）
+        }
+
+        // === 逻辑：点亮/取消点亮 ===
+        if (visitedPlaces[id]) {
+            delete visitedPlaces[id]; // 取消点亮
+        } else {
+            visitedPlaces[id] = true; // 点亮
+        }
+        
+        saveAndRefresh();
+    }
+
+    // --- 5. 数据加载函数 ---
+    async function loadMapData(url, level) {
+        // 移除旧图层
+        if (currentGeoJsonLayer) {
+            map.removeLayer(currentGeoJsonLayer);
+        }
+
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+            
+            currentGeoJsonLayer = L.geoJSON(data, {
+                style: getStyle,
+                onEachFeature: (feature, layer) => {
+                    layer.on('click', (e) => onFeatureClick(e, feature));
+                }
+            }).addTo(map);
+            
+            currentLevel = level;
+            updateUI();
+        } catch (error) {
+            console.error("加载地图数据失败:", error);
+            alert("数据加载失败！请检查：\n1. 是否已解压 zip 文件\n2. 文件名是否正确 (world.geojson)");
+        }
+    }
+
+    // --- 6. 视图切换逻辑 ---
+    
+    // 进入中国视图
+    function enterChinaView() {
+        // 1. 飞入动画
+        map.flyTo([35.86, 104.19], 4, { duration: 1.5 });
+        
+        // 2. 加载中国地级市数据
+        loadMapData('china-cities.geojson', 'china');
+    }
+
+    // 返回世界视图
+    function goBackToWorld() {
+        // 1. 飞回动画
+        map.flyTo([35, 105], 3, { duration: 1.5 });
+        
+        // 2. 重新加载世界数据
+        loadMapData('world.geojson', 'world');
+    }
+
+    // --- 7. 辅助功能 ---
+    function saveAndRefresh() {
+        // 保存到本地存储
+        localStorage.setItem('myVisitedPlaces', JSON.stringify(visitedPlaces));
+        updateUI();
+        
+        // 重绘当前图层以更新颜色
+        if (currentGeoJsonLayer) {
+            currentGeoJsonLayer.setStyle(getStyle);
+        }
+    }
+
+    function updateUI() {
+        // 更新计数
+        document.getElementById('count').innerText = Object.keys(visitedPlaces).length;
+        
+        // 控制返回按钮显示
+        const backBtn = document.getElementById('backBtn');
+        if (currentLevel === 'china') {
+            backBtn.style.display = 'block';
+        } else {
+            backBtn.style.display = 'none';
+        }
+    }
+
+    function resetData() {
+        if(confirm('确定要清空所有点亮记录吗？此操作无法撤销。')) {
+            localStorage.removeItem('myVisitedPlaces');
+            visitedPlaces = {};
+            saveAndRefresh();
+        }
+    }
+
+    // --- 8. 启动 ---
+    // 初始化加载世界地图
+    loadMapData('world.geojson', 'world');
+
+</script>
+</body>
+</html>
