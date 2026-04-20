@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的足迹地图 - 常驻标签版</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; overflow: hidden; background: #222; }
+        #map { width: 100vw; height: 100vh; background: #1a1a1a; }
+        
+        /* 左侧控制面板 */
+        .ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            min-width: 220px;
+        }
+        .ui-panel h2 { margin: 0 0 15px 0; font-size: 18px; color: #333; border-bottom: 2px solid #f0f0f0; padding-bottom: 10px; }
+        .stat-row { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 14px; color: #666; }
+        .highlight-num { color: #ff9a00; font-weight: bold; font-size: 16px; }
+        
+        .btn {
+            background: #ff9a00;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+            width: 100%;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        .btn:hover { background: #e68a00; }
+        .btn.reset { background: #999; }
+        .btn.back { display: none; background: #333; }
+
+        /* --- 右侧列表样式 --- */
+        .sidebar {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            bottom: 20px;
+            width: 280px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            pointer-events: none; 
+        }
+        
+        .sidebar-content {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            overflow: hidden;
+            pointer-events: auto; 
+            display: flex;
+            flex-direction: column;
+            max-height: 100%;
+        }
+
+        .sidebar-header {
+            padding: 15px;
+            background: #333;
+            color: white;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            user-select: none;
+        }
+        .sidebar-header:hover { background: #444; }
+        .sidebar-header h3 { margin: 0; font-size: 16px; }
+        .toggle-icon { transition: transform 0.3s; }
+        .collapsed .toggle-icon { transform: rotate(-90deg); }
+
+        .sidebar-body {
+            padding: 15px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .collapsed .sidebar-body { display: none; }
+
+        .list-group { margin-bottom: 20px; }
+        .list-group:last-child { margin-bottom: 0; }
+        .list-title {
+            font-size: 12px;
+            color: #999;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+            font-weight: bold;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 4px;
+        }
+        .tag-container { display: flex; flex-wrap: wrap; gap: 6px; }
+        .tag {
+            background: #f0f2f5;
+            color: #333;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            border: 1px solid #e0e0e0;
+            transition: all 0.2s;
+        }
+        .tag:hover { background: #ff9a00; color: white; border-color: #ff9a00; }
+
+        /* 地图样式 */
+        .leaflet-container { background: #1a1a1a; }
+        .leaflet-interactive { stroke: #ffffff; stroke-width: 0.8px; transition: fill 0.3s; }
+        
+        /* --- 标签样式 --- */
+        .map-label {
+            background: #ff9a00;
+            color: #fff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            white-space: nowrap;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            border: 1px solid #fff;
+            z-index: 1001;
+            pointer-events: none;
+            text-align: center;
+        }
+
+        @media (max-width: 600px) {
+            .sidebar { width: 100%; top: auto; bottom: 0; left: 0; right: 0; height: 40%; }
+            .ui-panel { top: 10px; left: 10px; right: 10px; min-width: auto; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<!-- 左侧面板 -->
+<div class="ui-panel">
+    <h2>🌍 我的足迹</h2>
+    <div class="stat-row">
+        <span>总计点亮:</span>
+        <span id="count" class="highlight-num">0</span>
+    </div>
+    <button class="btn back" id="backBtn" onclick="goBackToWorld()">← 返回世界视图</button>
+    <button class="btn" onclick="resetData()">重置数据</button>
+</div>
+
+<!-- 右侧列表面板 -->
+<div class="sidebar">
+    <div class="sidebar-content" id="sidebarContent">
+        <div class="sidebar-header" onclick="toggleSidebar()">
+            <h3>📍 已点亮列表</h3>
+            <span class="toggle-icon">▼</span>
+        </div>
+        <div class="sidebar-body" id="sidebarBody">
+            <div class="list-group">
+                <div class="list-title">国家 / 地区</div>
+                <div class="tag-container" id="countryList">
+                    <span style="color:#999; font-size:12px;">暂无数据</span>
+                </div>
+            </div>
+            <div class="list-group">
+                <div class="list-title">中国城市</div>
+                <div class="tag-container" id="cityList">
+                    <span style="color:#999; font-size:12px;">暂无数据</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    // --- 1. 中文翻译字典 ---
+    const dictionary = {
+        "China": "中国",
+        "United States": "美国",
+        "Russia": "俄罗斯",
+        "Japan": "日本",
+        "United Kingdom": "英国",
+        "France": "法国",
+        "Germany": "德国",
+        "Australia": "澳大利亚",
+        "Canada": "加拿大",
+        "India": "印度",
+        "Brazil": "巴西"
+    };
+
+    function translate(name) {
+        return dictionary[name] || name;
+    }
+
+    // --- 2. 初始化地图 ---
+    const map = L.map('map', {
+        center: [35, 105],
+        zoom: 3,
+        zoomControl: false,
+        minZoom: 2
+    });
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap &copy; CARTO',
+        subdomains: 'abcd',
+        maxZoom: 19
+    }).addTo(map);
+
+    // --- 3. 全局变量 ---
+    let visitedPlaces = JSON.parse(localStorage.getItem('myVisitedPlaces')) || {};
+    let currentGeoJsonLayer = null;
+    let currentLevel = 'world'; 
+    let chinaCitiesNames = []; 
+    let labelLayerGroup = L.layerGroup().addTo(map); // 标签图层组
+
+    // --- 4. 核心样式函数 ---
+    function getStyle(feature) {
+        const id = feature.properties.name || feature.id;
+        const isVisited = visitedPlaces[id];
+        return {
+            fillColor: isVisited ? '#ff9a00' : '#334455',
+            fillOpacity: isVisited ? 0.9 : 0.4,
+            color: '#ffffff',
+            weight: 1
+        };
+    }
+
+    // --- 5. 点击事件处理 ---
+    function onFeatureClick(e, feature) {
+        const name = feature.properties.name;
+        const id = feature.properties.name || feature.id;
+
+        // 逻辑：下钻中国
+        if (currentLevel === 'world' && name === 'China') {
+            enterChinaView();
+            return;
+        }
+
+        // 逻辑：点亮/取消
+        if (visitedPlaces[id]) {
+            delete visitedPlaces[id];
+        } else {
+            visitedPlaces[id] = true;
+        }
+        
+        saveAndRefresh();
+    }
+
+    // --- 6. 数据加载函数 ---
+    async function loadMapData(url, level) {
+        if (currentGeoJsonLayer) {
+            map.removeLayer(currentGeoJsonLayer);
+        }
+        // 切换地图时清空旧标签
+        labelLayerGroup.clearLayers();
+
+        try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            const data = await response.json();
+            
+            // 如果是加载中国地图，顺便把城市名字存下来
+            if (level === 'china') {
+                chinaCitiesNames = data.features.map(f => f.properties.name).filter(n => n);
+            }
+
+            currentGeoJsonLayer = L.geoJSON(data, {
+                style: getStyle,
+                onEachFeature: (feature, layer) => {
+                    layer.on('click', (e) => onFeatureClick(e, feature));
+                }
+            }).addTo(map);
+            
+            currentLevel = level;
+            updateUI();
+            
+            // --- 关键修改：地图加载完成后，立即刷新一次标签 ---
+            updateLabels();
+            
+        } catch (error) {
+            console.error("加载地图数据失败:", error);
+            alert(`数据加载失败！\n文件：${url}`);
+        }
+    }
+
+    // --- 7. 视图切换逻辑 ---
+    function enterChinaView() {
+        map.flyTo([35.86, 104.19], 4, { duration: 1.5 });
+        loadMapData('china-cities.geojson', 'china');
+    }
+
+    function goBackToWorld() {
+        map.flyTo([35, 105], 3, { duration: 1.5 });
+        loadMapData('world.geo.json', 'world');
+    }
+
+    // --- 8. 界面更新逻辑 ---
+    function saveAndRefresh() {
+        localStorage.setItem('myVisitedPlaces', JSON.stringify(visitedPlaces));
+        updateUI();
+        if (currentGeoJsonLayer) {
+            currentGeoJsonLayer.setStyle(getStyle);
+        }
+        // --- 关键修改：数据保存后，立即刷新标签 ---
+        updateLabels();
+    }
+
+    function updateUI() {
+        document.getElementById('count').innerText = Object.keys(visitedPlaces).length;
+        const backBtn = document.getElementById('backBtn');
+        if (currentLevel === 'china') {
+            backBtn.style.display = 'block';
+        } else {
+            backBtn.style.display = 'none';
+        }
+        updateSidebarList();
+    }
+
+    // --- 9. 列表分类逻辑 ---
+    function updateSidebarList() {
+        const countryListEl = document.getElementById('countryList');
+        const cityListEl = document.getElementById('cityList');
+        
+        countryListEl.innerHTML = '';
+        cityListEl.innerHTML = '';
+
+        const countries = [];
+        const cities = [];
+
+        for (const id in visitedPlaces) {
+            const isCity = chinaCitiesNames.includes(id);
+            if (isCity) {
+                cities.push(id);
+            } else {
+                countries.push(translate(id));
+            }
+        }
+
+        // 渲染国家
+        if (countries.length === 0) {
+            countryListEl.innerHTML = '<span style="color:#999; font-size:12px;">暂无数据</span>';
+        } else {
+            [...new Set(countries)].sort().forEach(name => {
+                const tag = document.createElement('div');
+                tag.className = 'tag';
+                tag.innerText = name;
+                countryListEl.appendChild(tag);
+            });
+        }
+
+        // 渲染城市
+        if (cities.length === 0) {
+            cityListEl.innerHTML = '<span style="color:#999; font-size:12px;">暂无数据</span>';
+        } else {
+            [...new Set(cities)].sort().forEach(name => {
+                const tag = document.createElement('div');
+                tag.className = 'tag';
+                tag.innerText = name;
+                cityListEl.appendChild(tag);
+            });
+        }
+    }
+
+    // --- 10. 更新地图标签 ---
+    function updateLabels() {
+        // 1. 清空旧标签
+        labelLayerGroup.clearLayers();
+
+        // 2. 只有当地图图层存在时才执行
+        if (!currentGeoJsonLayer) return;
+
+        // 3. 遍历当前地图上显示的所有区域
+        currentGeoJsonLayer.eachLayer(function(layer) {
+            const id = layer.feature.properties.name || layer.feature.id;
+            
+            // 4. 如果这个区域被点亮了，就显示标签
+            if (visitedPlaces[id]) {
+                // 获取区域中心点
+                const center = layer.getBounds ? layer.getBounds().getCenter() : layer.getLatLng();
+                
+                // 获取显示名称
+                const isCity = chinaCitiesNames.includes(id);
+                const displayName = isCity ? id : translate(id);
+
+                // 创建标签 HTML
+                const label = L.marker(center, {
+                    icon: L.divIcon({
+                        className: 'map-label',
+                        html: displayName,
+                        iconSize: [100, 20],
+                        iconAnchor: [50, 10]
+                    })
+                });
+                
+                // 添加到标签图层组
+                labelLayerGroup.addLayer(label);
+            }
+        });
+    }
+
+    // --- 11. 侧边栏折叠功能 ---
+    function toggleSidebar() {
+        const sidebar = document.getElementById('sidebarContent');
+        sidebar.classList.toggle('collapsed');
+    }
+
+    function resetData() {
+        if(confirm('确定要清空所有点亮记录吗？')) {
+            localStorage.removeItem('myVisitedPlaces');
+            visitedPlaces = {};
+            saveAndRefresh();
+        }
+    }
+
+    // --- 12. 启动 ---
+    loadMapData('world.geo.json', 'world');
+
+</script>
+</body>
+</html>
